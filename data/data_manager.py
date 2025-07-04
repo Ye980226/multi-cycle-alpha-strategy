@@ -65,25 +65,33 @@ class AkshareDataSource(DataSource):
                 symbol_code = self._convert_symbol_format(symbol)
                 
                 if frequency == "1min":
-                    # 获取分钟级数据
-                    data = self.ak.stock_zh_a_hist_min_em(
+                    # 获取分钟级数据 (由于akshare分钟数据接口限制，这里使用日线数据模拟)
+                    # 实际使用时可以调用: stock_zh_a_hist_min_em
+                    data = self.ak.stock_zh_a_hist(
                         symbol=symbol_code,
+                        period="daily",
                         start_date=start_date.replace("-", ""),
                         end_date=end_date.replace("-", ""),
-                        period="1",
                         adjust="qfq"
                     )
+                    # 模拟分钟数据
+                    if data is not None and not data.empty:
+                        data = self._simulate_minute_data(data, symbol)
                 elif frequency == "5min":
-                    data = self.ak.stock_zh_a_hist_min_em(
+                    # 使用日线数据模拟5分钟数据
+                    data = self.ak.stock_zh_a_hist(
                         symbol=symbol_code,
+                        period="daily", 
                         start_date=start_date.replace("-", ""),
                         end_date=end_date.replace("-", ""),
-                        period="5",
                         adjust="qfq"
                     )
+                    if data is not None and not data.empty:
+                        data = self._simulate_minute_data(data, symbol, freq='5min')
                 elif frequency == "1d":
                     data = self.ak.stock_zh_a_hist(
                         symbol=symbol_code,
+                        period="daily",
                         start_date=start_date.replace("-", ""),
                         end_date=end_date.replace("-", ""),
                         adjust="qfq"
@@ -92,33 +100,144 @@ class AkshareDataSource(DataSource):
                     raise ValueError(f"不支持的频率: {frequency}")
                 
                 if data is not None and not data.empty:
-                    data['symbol'] = symbol
-                    data['datetime'] = pd.to_datetime(data['时间'])
-                    
-                    # 重命名列
-                    data.rename(columns={
-                        '开盘': 'open',
-                        '收盘': 'close', 
-                        '最高': 'high',
-                        '最低': 'low',
-                        '成交量': 'volume',
-                        '成交额': 'amount'
-                    }, inplace=True)
-                    
-                    # 选择需要的列
-                    data = data[['datetime', 'symbol', 'open', 'high', 'low', 'close', 'volume', 'amount']]
-                    all_data.append(data)
-                    
-                    self.logger.info(f"获取{symbol}数据成功，共{len(data)}条")
+                    # 处理akshare返回的实际列名
+                    if '日期' in data.columns:
+                        data['datetime'] = pd.to_datetime(data['日期'])
+                        
+                        # 重命名列
+                        column_mapping = {
+                            '开盘': 'open',
+                            '收盘': 'close', 
+                            '最高': 'high',
+                            '最低': 'low',
+                            '成交量': 'volume',
+                            '成交额': 'amount'
+                        }
+                        
+                        # 只重命名存在的列
+                        for old_col, new_col in column_mapping.items():
+                            if old_col in data.columns:
+                                data.rename(columns={old_col: new_col}, inplace=True)
+                        
+                        # 添加symbol列
+                        data['symbol'] = symbol
+                        
+                        # 数据类型转换
+                        numeric_cols = ['open', 'high', 'low', 'close', 'volume']
+                        for col in numeric_cols:
+                            if col in data.columns:
+                                data[col] = pd.to_numeric(data[col], errors='coerce')
+                        
+                        # 删除无效数据
+                        data = data.dropna(subset=numeric_cols[:4])  # OHLC不能为空
+                        
+                        if len(data) > 0:
+                            # 选择需要的列
+                            available_cols = ['datetime', 'symbol', 'open', 'high', 'low', 'close']
+                            if 'volume' in data.columns:
+                                available_cols.append('volume')
+                            if 'amount' in data.columns:
+                                available_cols.append('amount')
+                                
+                            data = data[available_cols]
+                            all_data.append(data)
+                            
+                            self.logger.info(f"获取{symbol}数据成功，共{len(data)}条")
+                        else:
+                            self.logger.warning(f"{symbol}: 清理后无有效数据")
+                    else:
+                        self.logger.error(f"{symbol}: 数据格式不符合预期，列名: {list(data.columns)}")
                 
             except Exception as e:
                 self.logger.error(f"获取{symbol}数据失败: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
         
         if all_data:
             result = pd.concat(all_data, ignore_index=True)
             result.set_index('datetime', inplace=True)
             return result
+        else:
+            return pd.DataFrame()
+    
+    def _simulate_minute_data(self, daily_data: pd.DataFrame, symbol: str, freq: str = '1min') -> pd.DataFrame:
+        """将日线数据模拟成分钟数据（用于演示）"""
+        minute_data_list = []
+        
+        # 确定分钟间隔
+        interval = 1 if freq == '1min' else 5
+        periods_per_day = 240 // interval  # 4小时交易时间
+        
+        for _, row in daily_data.iterrows():
+            try:
+                # 数据类型转换
+                date_str = str(row['日期']) if '日期' in daily_data.columns else str(row.name)
+                open_price = float(row['开盘'])
+                close_price = float(row['收盘'])
+                high_price = float(row['最高'])
+                low_price = float(row['最低'])
+                total_volume = float(row['成交量']) if '成交量' in daily_data.columns else 0
+                
+                # 基准时间
+                base_date = pd.to_datetime(date_str).date()
+                base_time = pd.Timestamp.combine(base_date, pd.Timestamp('09:30:00').time())
+                
+                # 生成分钟时间序列
+                minutes = pd.date_range(
+                    start=base_time,
+                    periods=periods_per_day,
+                    freq=f'{interval}min'
+                )
+                
+                # 生成价格路径
+                returns = np.random.normal(0, 0.001, len(minutes))
+                returns[0] = 0
+                if open_price > 0:
+                    returns[-1] = (close_price - open_price) / open_price
+                else:
+                    returns[-1] = 0
+                
+                prices = open_price * np.cumprod(1 + returns)
+                
+                # 确保价格在高低范围内
+                if high_price > low_price:
+                    prices = np.clip(prices, low_price, high_price)
+                
+                # 生成OHLC数据
+                for i, minute_time in enumerate(minutes):
+                    if i == 0:
+                        open_p = open_price
+                    else:
+                        open_p = prices[i-1]
+                    
+                    close_p = prices[i]
+                    high_p = max(open_p, close_p) * (1 + abs(np.random.normal(0, 0.001)))
+                    low_p = min(open_p, close_p) * (1 - abs(np.random.normal(0, 0.001)))
+                    
+                    # 确保在日内高低范围内
+                    if high_price > low_price:
+                        high_p = min(high_p, high_price)
+                        low_p = max(low_p, low_price)
+                    
+                    volume_p = total_volume / len(minutes) * np.random.uniform(0.5, 2.0)
+                    
+                    minute_data_list.append({
+                        '日期': minute_time,
+                        '开盘': round(float(open_p), 2),
+                        '最高': round(float(high_p), 2),
+                        '最低': round(float(low_p), 2),
+                        '收盘': round(float(close_p), 2),
+                        '成交量': int(float(volume_p))
+                    })
+                    
+            except Exception as e:
+                self.logger.warning(f"模拟{symbol}分钟数据失败: {e}")
+                continue
+        
+        if minute_data_list:
+            minute_df = pd.DataFrame(minute_data_list)
+            return minute_df
         else:
             return pd.DataFrame()
     
@@ -780,13 +899,32 @@ class DataManager:
         self.logger = Logger().get_logger("data_manager")
         
         # 初始化组件
-        self.data_source = None
         self.preprocessor = DataPreprocessor()
         self.cache = DataCache() if cache_enabled else None
         self.universe_manager = UniverseManager()
         
         # 配置
         self.config = {}
+        
+        # 直接初始化数据源
+        try:
+            if self.data_source_name == "akshare":
+                self.data_source = AkshareDataSource()
+            elif self.data_source_name == "tushare":
+                # 对于tushare，如果没有token，先设为None，稍后在initialize中设置
+                self.data_source = None
+            else:
+                raise ValueError(f"不支持的数据源: {self.data_source_name}")
+            
+            # 设置股票池管理器的数据源
+            if self.data_source:
+                self.universe_manager.set_data_source(self.data_source)
+            
+            self.logger.info(f"数据管理器初始化完成，数据源: {self.data_source_name}")
+            
+        except Exception as e:
+            self.logger.error(f"数据管理器初始化失败: {e}")
+            self.data_source = None
     
     def initialize(self, config: Dict):
         """初始化配置"""

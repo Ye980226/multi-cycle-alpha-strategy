@@ -21,9 +21,51 @@ class DataConfig:
     end_date: str = "2024-01-01"
     benchmark: str = "000300.SH"  # 基准指数
     
+    # 真实数据源配置
+    akshare: Dict[str, Any] = None  # akshare配置
+    tushare: Dict[str, Any] = None  # tushare配置
+    minute_data: Dict[str, Any] = None  # 分钟级数据配置
+    test: Dict[str, Any] = None  # 测试配置
+    
     def __post_init__(self):
         if self.universe is None:
             self.universe = ["HS300", "ZZ500"]  # 默认股票池
+        
+        # 设置默认的数据源配置
+        if self.akshare is None:
+            self.akshare = {
+                "timeout": 30,
+                "retry_times": 3,
+                "retry_delay": 1,
+                "cache_enabled": True,
+                "cache_expire_hours": 24
+            }
+        
+        if self.tushare is None:
+            self.tushare = {
+                "token": "",
+                "timeout": 30,
+                "retry_times": 3,
+                "cache_enabled": True
+            }
+        
+        if self.minute_data is None:
+            self.minute_data = {
+                "trading_sessions": {
+                    "morning": ["09:30", "11:30"],
+                    "afternoon": ["13:00", "15:00"]
+                },
+                "exclude_weekends": True,
+                "exclude_holidays": True,
+                "fill_missing_method": "forward_fill"
+            }
+        
+        if self.test is None:
+            self.test = {
+                "symbols": ["000001", "000002", "600000", "600036"],
+                "test_days": 30,
+                "enable_simulation": True
+            }
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""

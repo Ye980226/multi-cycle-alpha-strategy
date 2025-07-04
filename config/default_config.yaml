@@ -2,12 +2,41 @@
 
 # 数据配置
 data:
-  data_source: "akshare"
-  frequency: "1min"
+  data_source: "akshare"  # akshare, tushare, mock
+  frequency: "1min"  # 1min, 5min, 15min, 30min, 1h, 1d
   universe: ["HS300", "ZZ500"]
   start_date: "2020-01-01"
   end_date: "2024-01-01"
   benchmark: "000300.SH"
+  
+  # 真实数据源配置
+  akshare:
+    timeout: 30
+    retry_times: 3
+    retry_delay: 1
+    cache_enabled: true
+    cache_expire_hours: 24
+    
+  tushare:
+    token: ""  # 请填入您的tushare token
+    timeout: 30
+    retry_times: 3
+    cache_enabled: true
+    
+  # 分钟级数据特定配置
+  minute_data:
+    trading_sessions:
+      morning: ["09:30", "11:30"]
+      afternoon: ["13:00", "15:00"]
+    exclude_weekends: true
+    exclude_holidays: true
+    fill_missing_method: "forward_fill"
+    
+  # 测试配置
+  test:
+    symbols: ["000001", "000002", "600000", "600036"]  # 测试股票代码
+    test_days: 30  # 测试天数
+    enable_simulation: true  # 是否启用分钟数据模拟
 
 # 因子配置
 factors:
