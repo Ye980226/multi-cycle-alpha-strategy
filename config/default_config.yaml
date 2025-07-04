@@ -2,7 +2,7 @@
 
 # 数据配置
 data:
-  source: "akshare"
+  data_source: "akshare"
   frequency: "1min"
   universe: ["HS300", "ZZ500"]
   start_date: "2020-01-01"
@@ -11,15 +11,15 @@ data:
 
 # 因子配置
 factors:
-  groups: ["technical", "fundamental", "sentiment"]
+  factor_groups: ["technical", "fundamental", "sentiment"]
   lookback_periods: [5, 10, 20, 60]
-  update_frequency: "1d"
-  neutralization: true
-  standardization: "zscore"
+  factor_update_frequency: "1d"
+  factor_neutralization: true
+  factor_standardization: "zscore"
 
 # 模型配置
 models:
-  types: ["lightgbm", "xgboost", "linear"]
+  model_types: ["lightgbm", "xgboost", "linear"]
   ensemble_method: "weighted_average"
   retrain_frequency: "1w"
   validation_method: "time_series_split"

@@ -1,0 +1,70 @@
+backtest:
+  benchmark: 000300.SH
+  initial_capital: 1000000
+  slippage: 0.0005
+  transaction_cost: 0.001
+data:
+  benchmark: 000300.SH
+  data_source: tushare
+  end_date: '2024-01-01'
+  frequency: 5min
+  start_date: '2020-01-01'
+  universe:
+  - HS300
+  - ZZ500
+factors:
+  factor_groups:
+  - technical
+  - fundamental
+  - sentiment
+  factor_neutralization: true
+  factor_standardization: zscore
+  factor_update_frequency: 1d
+  lookback_periods:
+  - 5
+  - 10
+  - 20
+  - 60
+logging:
+  backup_count: 5
+  file_path: ./logs/strategy.log
+  level: INFO
+  max_file_size: 10MB
+models:
+  ensemble_method: weighted_average
+  max_features: 50
+  model_types:
+  - lightgbm
+  - xgboost
+  - linear
+  - neural_network
+  retrain_frequency: 1w
+  validation_method: time_series_split
+monitoring:
+  alert_thresholds:
+    max_drawdown: 0.08
+    max_volatility: 0.25
+    min_sharpe: 0.5
+  notification:
+    email: true
+    sms: false
+    webhook: false
+portfolio:
+  cycles:
+  - intraday
+  - daily
+  - weekly
+  max_position: 0.08
+  max_turnover: 0.3
+  optimization_method: mean_variance
+  rebalance_frequency: 1d
+  risk_budget: 0.15
+  transaction_cost: 0.001
+risk:
+  beta_range:
+  - 0.8
+  - 1.2
+  max_drawdown: 0.08
+  sector_exposure_limit: 0.3
+  single_stock_limit: 0.05
+  var_confidence: 0.99
