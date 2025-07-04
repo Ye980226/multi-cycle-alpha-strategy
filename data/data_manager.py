@@ -892,19 +892,35 @@ class UniverseManager:
 class DataManager:
     """数据管理主类"""
     
-    def __init__(self, data_source: str = "akshare", cache_enabled: bool = True):
+    def __init__(self, config=None, cache_enabled: bool = True):
         """初始化数据管理器"""
-        self.data_source_name = data_source
-        self.cache_enabled = cache_enabled
         self.logger = Logger().get_logger("data_manager")
+        
+        # 处理配置参数
+        if config is None:
+            self.data_source_name = "akshare"
+            self.config = {}
+        elif isinstance(config, str):
+            self.data_source_name = config
+            self.config = {}
+        else:
+            # 处理DataConfig对象
+            if hasattr(config, 'data_source'):
+                self.data_source_name = config.data_source
+            else:
+                self.data_source_name = "akshare"
+            
+            if hasattr(config, '__dict__'):
+                self.config = config.__dict__.copy()
+            else:
+                self.config = {}
+        
+        self.cache_enabled = cache_enabled
         
         # 初始化组件
         self.preprocessor = DataPreprocessor()
         self.cache = DataCache() if cache_enabled else None
         self.universe_manager = UniverseManager()
-        
-        # 配置
-        self.config = {}
         
         # 直接初始化数据源
         try:
@@ -914,7 +930,9 @@ class DataManager:
                 # 对于tushare，如果没有token，先设为None，稍后在initialize中设置
                 self.data_source = None
             else:
-                raise ValueError(f"不支持的数据源: {self.data_source_name}")
+                self.logger.warning(f"不支持的数据源: {self.data_source_name}，使用akshare作为默认数据源")
+                self.data_source = AkshareDataSource()
+                self.data_source_name = "akshare"
             
             # 设置股票池管理器的数据源
             if self.data_source:
@@ -1071,6 +1089,38 @@ class DataManager:
         except Exception as e:
             self.logger.error(f"获取股票池失败: {e}")
             return []
+    
+    def get_stock_list(self) -> List[str]:
+        """获取股票列表"""
+        try:
+            # 从配置中获取股票列表
+            if 'test' in self.config and 'symbols' in self.config['test']:
+                symbols = self.config['test']['symbols']
+                return symbols
+            
+            # 如果有AkShare数据源，尝试获取股票基本信息
+            if isinstance(self.data_source, AkshareDataSource):
+                try:
+                    stock_info = self.data_source.get_stock_basic_info()
+                    if not stock_info.empty and '代码' in stock_info.columns:
+                        symbols = stock_info['代码'].tolist()[:100]  # 返回前100只股票
+                        # 转换为标准格式
+                        formatted_symbols = []
+                        for code in symbols:
+                            if code.startswith('6'):
+                                formatted_symbols.append(f"{code}.SH")
+                            else:
+                                formatted_symbols.append(f"{code}.SZ")
+                        return formatted_symbols
+                except Exception as e:
+                    self.logger.warning(f"从AkShare获取股票列表失败: {e}")
+            
+            # 默认返回一些测试股票
+            return ['000001', '000002', '600000', '600036', '000858']
+            
+        except Exception as e:
+            self.logger.error(f"获取股票列表失败: {e}")
+            return ['000001', '000002', '600000', '600036', '000858']
     
     def preprocess_data(self, data: pd.DataFrame, config: Dict) -> pd.DataFrame:
         """预处理数据"""

@@ -41,14 +41,17 @@ class BaseSignalGenerator(ABC):
                     # 使用3倍标准差去除极值
                     mean_val = processed_factors[col].mean()
                     std_val = processed_factors[col].std()
-                    processed_factors[col] = processed_factors[col].clip(
-                        lower=mean_val - 3 * std_val,
-                        upper=mean_val + 3 * std_val
-                    )
+                    if std_val > 0:
+                        processed_factors[col] = processed_factors[col].clip(
+                            lower=mean_val - 3 * std_val,
+                            upper=mean_val + 3 * std_val
+                        )
             
-            # 标准化
-            scaler = StandardScaler()
-            processed_factors[processed_factors.columns] = scaler.fit_transform(processed_factors)
+            # 标准化（只对数值列）
+            numeric_columns = processed_factors.select_dtypes(include=[np.number]).columns
+            if len(numeric_columns) > 0:
+                scaler = StandardScaler()
+                processed_factors[numeric_columns] = scaler.fit_transform(processed_factors[numeric_columns])
             
             return processed_factors
             

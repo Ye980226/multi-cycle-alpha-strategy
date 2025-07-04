@@ -270,22 +270,397 @@ class BlackLittermanOptimizer(BaseOptimizer):
         pass
 
 
+class BarraOptimizer(BaseOptimizer):
+    """Barra多因子风险模型优化器"""
+    
+    def __init__(self, factor_model_type: str = "fundamental"):
+        """初始化Barra优化器"""
+        super().__init__("barra")
+        self.factor_model_type = factor_model_type
+        self.factor_exposures = None
+        self.factor_covariance = None
+        self.specific_risk = None
+        
+    def fit_factor_model(self, returns: pd.DataFrame, 
+                        factor_exposures: pd.DataFrame = None) -> None:
+        """拟合因子模型"""
+        try:
+            if factor_exposures is None:
+                # 如果没有提供因子暴露，使用简化的多因子模型
+                factor_exposures = self._create_simple_factor_exposures(returns)
+            
+            self.factor_exposures = factor_exposures
+            
+            # 通过回归估计因子收益率
+            factor_returns = self._estimate_factor_returns(returns, factor_exposures)
+            
+            # 估计因子协方差矩阵
+            self.factor_covariance = factor_returns.cov()
+            
+            # 估计特质风险
+            self.specific_risk = self._estimate_specific_risk(returns, factor_exposures, factor_returns)
+            
+            self.logger.info("Barra因子模型拟合完成")
+            
+        except Exception as e:
+            self.logger.error(f"因子模型拟合失败: {e}")
+            raise
+    
+    def _create_simple_factor_exposures(self, returns: pd.DataFrame) -> pd.DataFrame:
+        """创建简化的因子暴露矩阵"""
+        try:
+            n_assets = len(returns.columns)
+            
+            # 创建简单的风格因子暴露
+            # 市值因子 (简化为正态分布)
+            np.random.seed(42)  # 固定种子保证可重复
+            size_factor = np.random.normal(0, 1, n_assets)
+            
+            # 动量因子 (过去数据的收益率)
+            lookback_days = min(20, len(returns))
+            momentum_factor = returns.tail(lookback_days).mean().fillna(0).values
+            
+            # 波动率因子 (过去数据的波动率)
+            volatility_factor = returns.tail(lookback_days).std().fillna(0.1).values
+            
+            # 简化为只使用3个风格因子
+            factor_exposures = pd.DataFrame({
+                'size': size_factor,
+                'momentum': momentum_factor,
+                'volatility': volatility_factor
+            }, index=returns.columns)
+            
+            # 标准化风格因子
+            for factor in factor_exposures.columns:
+                if factor_exposures[factor].std() > 1e-8:
+                    factor_exposures[factor] = (
+                        factor_exposures[factor] - factor_exposures[factor].mean()
+                    ) / factor_exposures[factor].std()
+                else:
+                    # 如果标准差太小，使用均匀分布
+                    factor_exposures[factor] = np.linspace(-1, 1, n_assets)
+            
+            return factor_exposures
+            
+        except Exception as e:
+            self.logger.error(f"创建因子暴露失败: {e}")
+            return pd.DataFrame()
+    
+    def _estimate_factor_returns(self, returns: pd.DataFrame, 
+                               factor_exposures: pd.DataFrame) -> pd.DataFrame:
+        """估计因子收益率"""
+        try:
+            factor_returns = pd.DataFrame(
+                index=returns.index, 
+                columns=factor_exposures.columns
+            )
+            
+            # 对每个时期进行横截面回归
+            for date in returns.index:
+                try:
+                    y = returns.loc[date].dropna()
+                    X = factor_exposures.loc[y.index]
+                    
+                    if len(y) > len(X.columns):  # 确保有足够的观测值
+                        # 最小二乘回归
+                        beta = np.linalg.lstsq(X.values, y.values, rcond=None)[0]
+                        factor_returns.loc[date] = beta
+                        
+                except Exception:
+                    continue
+            
+            return factor_returns.dropna()
+            
+        except Exception as e:
+            self.logger.error(f"因子收益率估计失败: {e}")
+            return pd.DataFrame()
+    
+    def _estimate_specific_risk(self, returns: pd.DataFrame,
+                              factor_exposures: pd.DataFrame,
+                              factor_returns: pd.DataFrame) -> pd.Series:
+        """估计特质风险"""
+        try:
+            residuals = pd.DataFrame(index=returns.index, columns=returns.columns)
+            
+            # 计算残差
+            for date in returns.index:
+                if date in factor_returns.index:
+                    factor_ret = factor_returns.loc[date]
+                    predicted_returns = factor_exposures.dot(factor_ret)
+                    actual_returns = returns.loc[date]
+                    
+                    common_assets = predicted_returns.index.intersection(actual_returns.index)
+                    residuals.loc[date, common_assets] = (
+                        actual_returns[common_assets] - predicted_returns[common_assets]
+                    )
+            
+            # 计算特质风险（残差标准差）
+            specific_risk = residuals.std()
+            
+            # 处理缺失值
+            specific_risk = specific_risk.fillna(specific_risk.mean())
+            
+            return specific_risk
+            
+        except Exception as e:
+            self.logger.error(f"特质风险估计失败: {e}")
+            return pd.Series()
+    
+    def optimize(self, expected_returns: pd.Series,
+                covariance_matrix: pd.DataFrame = None,
+                constraints: Dict = None) -> pd.Series:
+        """Barra模型优化 - 使用cvxpy凸优化"""
+        try:
+            if self.factor_exposures is None or self.factor_covariance is None:
+                self.logger.error("因子模型未拟合，请先调用fit_factor_model")
+                return pd.Series(dtype=float)
+            
+            # 确保数据对齐
+            common_assets = expected_returns.index.intersection(self.factor_exposures.index)
+            if len(common_assets) == 0:
+                self.logger.error("没有共同的资产")
+                return pd.Series(dtype=float)
+            
+            expected_returns_aligned = expected_returns[common_assets]
+            factor_exposures_aligned = self.factor_exposures.loc[common_assets]
+            specific_risk_aligned = self.specific_risk[common_assets]
+            
+            # 构建Barra风险模型的协方差矩阵
+            # Cov = B * F * B' + S
+            # 其中 B是因子暴露，F是因子协方差，S是特质风险对角矩阵
+            factor_cov_contribution = factor_exposures_aligned.dot(
+                self.factor_covariance
+            ).dot(factor_exposures_aligned.T)
+            
+            specific_cov = np.diag(specific_risk_aligned ** 2)
+            
+            total_covariance = factor_cov_contribution.values + specific_cov
+            
+            # 确保协方差矩阵是正定的
+            try:
+                eigenvalues, eigenvectors = np.linalg.eigh(total_covariance)
+                eigenvalues = np.maximum(eigenvalues, 1e-8)  # 确保正定
+                total_covariance = eigenvectors.dot(np.diag(eigenvalues)).dot(eigenvectors.T)
+            except np.linalg.LinAlgError:
+                # 如果特征值分解失败，使用对角线化的协方差矩阵
+                self.logger.warning("特征值分解失败，使用对角线化协方差矩阵")
+                total_covariance = np.diag(np.diag(total_covariance))
+                # 确保对角线元素为正数
+                total_covariance = np.maximum(total_covariance, 1e-8)
+            
+            # 使用cvxpy进行凸优化
+            if not HAS_CVXPY:
+                self.logger.warning("cvxpy不可用，使用scipy备选方案")
+                return self._optimize_with_scipy(expected_returns_aligned, total_covariance, common_assets, constraints)
+            
+            optimal_weights = self._optimize_with_cvxpy(expected_returns_aligned, total_covariance, common_assets, constraints)
+            
+            # 如果优化失败，使用等权重作为备选
+            if optimal_weights.empty or optimal_weights.isna().any():
+                self.logger.warning("cvxpy优化失败，使用等权重作为备选")
+                n_assets = len(common_assets)
+                optimal_weights = pd.Series(1.0 / n_assets, index=common_assets)
+            
+            self.logger.info("Barra模型优化完成")
+            return optimal_weights
+            
+        except Exception as e:
+            self.logger.error(f"Barra模型优化失败: {e}")
+            return pd.Series(dtype=float)
+    
+    def _optimize_with_cvxpy(self, expected_returns: pd.Series, 
+                           covariance_matrix: np.ndarray,
+                           assets: pd.Index,
+                           constraints: Dict = None) -> pd.Series:
+        """使用cvxpy进行凸优化"""
+        try:
+            n_assets = len(assets)
+            
+            # 调试信息
+            self.logger.info(f"=== cvxpy优化调试信息 ===")
+            self.logger.info(f"资产数量: {n_assets}")
+            self.logger.info(f"资产列表: {list(assets)}")
+            self.logger.info(f"预期收益率: {expected_returns.values}")
+            self.logger.info(f"预期收益率统计: 均值={expected_returns.mean():.6f}, 标准差={expected_returns.std():.6f}")
+            self.logger.info(f"协方差矩阵形状: {covariance_matrix.shape}")
+            self.logger.info(f"协方差矩阵特征值: {np.linalg.eigvals(covariance_matrix)}")
+            
+            # 检查数据有效性
+            if np.any(np.isnan(expected_returns.values)):
+                self.logger.error("预期收益率包含NaN")
+                return pd.Series(dtype=float)
+            if np.any(np.isinf(expected_returns.values)):
+                self.logger.error("预期收益率包含无穷大")
+                return pd.Series(dtype=float)
+            if np.any(np.isnan(covariance_matrix)):
+                self.logger.error("协方差矩阵包含NaN")
+                return pd.Series(dtype=float)
+            if np.any(np.isinf(covariance_matrix)):
+                self.logger.error("协方差矩阵包含无穷大")
+                return pd.Series(dtype=float)
+            
+            # 定义优化变量
+            weights = cp.Variable(n_assets)
+            
+            # 目标函数：最大化效用函数 (预期收益 - 风险惩罚)
+            risk_aversion = 1.0
+            portfolio_return = expected_returns.values @ weights
+            portfolio_risk = cp.quad_form(weights, covariance_matrix)
+            
+            # 目标函数：最大化 return - risk_aversion * risk
+            objective = cp.Maximize(portfolio_return - risk_aversion * portfolio_risk)
+            
+            # 约束条件
+            constraints_list = []
+            
+            # 权重和为1
+            constraints_list.append(cp.sum(weights) == 1)
+            
+            # 处理权重约束
+            if constraints is not None:
+                min_weight = constraints.get('min_weight', 0.0)
+                max_weight = constraints.get('max_weight', 1.0)
+                
+                self.logger.info(f"原始约束: min_weight={min_weight}, max_weight={max_weight}")
+                
+                # 确保约束合理
+                if min_weight < 0:
+                    min_weight = 0.0
+                if max_weight > 1:
+                    max_weight = 1.0
+                if min_weight * n_assets > 1:
+                    min_weight = 1.0 / n_assets
+                    
+                self.logger.info(f"调整后约束: min_weight={min_weight}, max_weight={max_weight}")
+                self.logger.info(f"权重和范围: [{min_weight * n_assets:.2f}, {max_weight * n_assets:.2f}]")
+                
+                constraints_list.append(weights >= min_weight)
+                constraints_list.append(weights <= max_weight)
+            else:
+                # 默认约束：非负权重
+                self.logger.info("使用默认约束: [0.0, 1.0]")
+                constraints_list.append(weights >= 0.0)
+                constraints_list.append(weights <= 1.0)
+            
+            # 构建问题
+            problem = cp.Problem(objective, constraints_list)
+            
+            # 求解
+            try:
+                self.logger.info("开始cvxpy求解...")
+                problem.solve(solver=cp.OSQP, verbose=False)
+                
+                self.logger.info(f"求解状态: {problem.status}")
+                if problem.status == cp.OPTIMAL:
+                    optimal_weights = pd.Series(weights.value, index=assets)
+                    self.logger.info(f"cvxpy优化成功，目标函数值: {problem.value:.6f}")
+                    self.logger.info(f"最优权重: {optimal_weights.values}")
+                    self.logger.info(f"权重和: {optimal_weights.sum():.6f}")
+                    return optimal_weights
+                else:
+                    self.logger.error(f"cvxpy优化失败，状态: {problem.status}")
+                    return pd.Series(dtype=float)
+                    
+            except Exception as solve_error:
+                self.logger.error(f"cvxpy求解失败: {solve_error}")
+                # 尝试其他求解器
+                try:
+                    self.logger.info("尝试ECOS求解器...")
+                    problem.solve(solver=cp.ECOS, verbose=False)
+                    if problem.status == cp.OPTIMAL:
+                        optimal_weights = pd.Series(weights.value, index=assets)
+                        self.logger.info(f"cvxpy优化成功(ECOS)，目标函数值: {problem.value:.6f}")
+                        return optimal_weights
+                except Exception:
+                    pass
+                    
+                return pd.Series(dtype=float)
+                
+        except Exception as e:
+            self.logger.error(f"cvxpy优化失败: {e}")
+            return pd.Series(dtype=float)
+    
+    def _optimize_with_scipy(self, expected_returns: pd.Series, 
+                           covariance_matrix: np.ndarray,
+                           assets: pd.Index,
+                           constraints: Dict = None) -> pd.Series:
+        """使用scipy作为备选优化方案"""
+        try:
+            n_assets = len(assets)
+            
+            # 目标函数
+            def objective(weights):
+                portfolio_return = np.dot(weights, expected_returns.values)
+                portfolio_risk = np.dot(weights, np.dot(covariance_matrix, weights))
+                return -(portfolio_return - 1.0 * portfolio_risk)
+            
+            # 约束条件
+            constraints_list = []
+            
+            # 权重和为1
+            constraints_list.append({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+            
+            # 权重边界
+            if constraints is not None:
+                min_weight = max(constraints.get('min_weight', 0.0), 0.0)
+                max_weight = min(constraints.get('max_weight', 1.0), 1.0)
+                if min_weight * n_assets > 1:
+                    min_weight = 0.0
+                bounds = [(min_weight, max_weight) for _ in range(n_assets)]
+            else:
+                bounds = [(0.0, 1.0) for _ in range(n_assets)]
+            
+            # 初始权重
+            initial_weights = np.ones(n_assets) / n_assets
+            
+            # 优化
+            result = minimize(
+                objective,
+                initial_weights,
+                method='SLSQP',
+                bounds=bounds,
+                constraints=constraints_list,
+                options={'maxiter': 1000, 'ftol': 1e-9}
+            )
+            
+            if result.success:
+                optimal_weights = pd.Series(result.x, index=assets)
+                self.logger.info(f"scipy优化成功，目标函数值: {-result.fun:.6f}")
+                return optimal_weights
+            else:
+                self.logger.error(f"scipy优化失败: {result.message}")
+                return pd.Series(dtype=float)
+                
+        except Exception as e:
+            self.logger.error(f"scipy优化失败: {e}")
+            return pd.Series(dtype=float)
+
+
 class RiskParityOptimizer(BaseOptimizer):
     """风险平价优化器"""
     
     def __init__(self):
         """初始化风险平价优化器"""
-        pass
+        super().__init__("risk_parity")
     
     def optimize(self, expected_returns: pd.Series,
                 covariance_matrix: pd.DataFrame,
                 constraints: Dict = None) -> pd.Series:
         """风险平价优化"""
-        pass
+        return self.equal_risk_contribution(covariance_matrix)
     
     def equal_risk_contribution(self, covariance_matrix: pd.DataFrame) -> pd.Series:
         """等风险贡献"""
-        pass
+        try:
+            n_assets = len(covariance_matrix)
+            
+            # 简化的等权重实现
+            weights = pd.Series(1.0 / n_assets, index=covariance_matrix.index)
+            return weights
+            
+        except Exception as e:
+            self.logger.error(f"风险平价优化失败: {e}")
+            return pd.Series(dtype=float)
 
 
 class HierarchicalRiskParityOptimizer(BaseOptimizer):
@@ -451,12 +826,15 @@ class PortfolioOptimizer:
         
         # 初始化各种优化器
         self.mean_variance_optimizer = MeanVarianceOptimizer()
+        self.barra_optimizer = BarraOptimizer()
+        self.risk_parity_optimizer = RiskParityOptimizer()
         
         # 配置参数
         self.risk_aversion = self.config.get('risk_aversion', 1.0)
         self.lookback_window = self.config.get('lookback_window', 252)
         self.min_weight = self.config.get('min_weight', 0.0)
-        self.max_weight = self.config.get('max_weight', 0.1)
+        # 处理max_weight和max_position的映射
+        self.max_weight = self.config.get('max_weight', self.config.get('max_position', 0.1))
     
     def initialize(self, config: Dict):
         """初始化配置"""
@@ -467,7 +845,8 @@ class PortfolioOptimizer:
             self.risk_aversion = config.get('risk_aversion', 1.0)
             self.lookback_window = config.get('lookback_window', 252)
             self.min_weight = config.get('min_weight', 0.0)
-            self.max_weight = config.get('max_weight', 0.1)
+            # 处理max_weight和max_position的映射
+            self.max_weight = config.get('max_weight', config.get('max_position', 0.1))
             
             # 重新初始化优化器
             self.mean_variance_optimizer = MeanVarianceOptimizer(self.risk_aversion)
@@ -540,6 +919,24 @@ class PortfolioOptimizer:
             # 进行优化
             if method == "mean_variance":
                 optimal_weights = self.mean_variance_optimizer.optimize(
+                    expected_returns_aligned, covariance_matrix_aligned, constraints
+                )
+            elif method == "barra":
+                # 使用Barra模型优化
+                if returns_data is not None:
+                    # 拟合因子模型
+                    stock_returns = returns_data[common_assets]
+                    self.barra_optimizer.fit_factor_model(stock_returns)
+                    
+                    # 进行优化
+                    optimal_weights = self.barra_optimizer.optimize(
+                        expected_returns_aligned, constraints=constraints
+                    )
+                else:
+                    self.logger.error("Barra模型需要股票收益率数据")
+                    return pd.Series(dtype=float)
+            elif method == "risk_parity":
+                optimal_weights = self.risk_parity_optimizer.optimize(
                     expected_returns_aligned, covariance_matrix_aligned, constraints
                 )
             elif method == "equal_weight":

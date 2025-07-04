@@ -41,6 +41,15 @@ class FactorEngine:
         self.factor_validator = FactorValidator(self.logger)
         self.factor_selector = FactorSelector(self.logger)
         
+        # 设置默认参数
+        self.technical_periods = self.config.get('technical_periods', [5, 10, 20, 60])
+        self.factor_groups = self.config.get('factor_groups', ['technical', 'fundamental', 'sentiment'])
+        self.max_workers = self.config.get('max_workers', 4)
+        self.use_multiprocessing = self.config.get('use_multiprocessing', False)
+        self.winsorize_quantiles = self.config.get('winsorize_quantiles', (0.01, 0.99))
+        self.standardize_method = self.config.get('standardize_method', 'zscore')
+        self.correlation_threshold = self.config.get('correlation_threshold', 0.8)
+        
         # 缓存
         self.factor_cache = {}
         self.correlation_cache = {}

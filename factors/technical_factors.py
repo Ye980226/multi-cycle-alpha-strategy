@@ -30,33 +30,51 @@ class TechnicalFactors:
     def calculate_all_factors(self, data: pd.DataFrame, periods: List[int] = [5, 10, 20, 60]) -> pd.DataFrame:
         """计算所有技术因子"""
         try:
+            # 原始数据列
+            original_columns = ['symbol', 'open', 'high', 'low', 'close', 'volume', 'amount', 
+                              'return_1', 'return_5', 'return_10', 'return_20']
+            
+            # 开始时只保留原始数据
             result = data.copy()
             
             # 计算动量因子
             momentum_factors = self.calculate_momentum_factors(data, periods)
-            result = pd.concat([result, momentum_factors], axis=1)
+            # 只添加新的因子列
+            new_momentum_cols = [col for col in momentum_factors.columns if col not in original_columns]
+            if new_momentum_cols:
+                result = pd.concat([result, momentum_factors[new_momentum_cols]], axis=1)
             
             # 计算趋势因子
             trend_factors = self.calculate_trend_factors(data)
-            result = pd.concat([result, trend_factors], axis=1)
+            new_trend_cols = [col for col in trend_factors.columns if col not in original_columns]
+            if new_trend_cols:
+                result = pd.concat([result, trend_factors[new_trend_cols]], axis=1)
             
             # 计算波动率因子
             volatility_factors = self.calculate_volatility_factors(data)
-            result = pd.concat([result, volatility_factors], axis=1)
+            new_volatility_cols = [col for col in volatility_factors.columns if col not in original_columns]
+            if new_volatility_cols:
+                result = pd.concat([result, volatility_factors[new_volatility_cols]], axis=1)
             
             # 计算成交量因子
             volume_factors = self.calculate_volume_factors(data)
-            result = pd.concat([result, volume_factors], axis=1)
+            new_volume_cols = [col for col in volume_factors.columns if col not in original_columns]
+            if new_volume_cols:
+                result = pd.concat([result, volume_factors[new_volume_cols]], axis=1)
             
             # 计算市场微观结构因子
             if len(data) > 100:  # 只有足够数据时才计算
                 microstructure_factors = self.calculate_microstructure_factors(data)
-                result = pd.concat([result, microstructure_factors], axis=1)
+                new_micro_cols = [col for col in microstructure_factors.columns if col not in original_columns]
+                if new_micro_cols:
+                    result = pd.concat([result, microstructure_factors[new_micro_cols]], axis=1)
             
             # 计算日内因子
             if len(data) > 100:  # 只有足够数据时才计算
                 intraday_factors = self.calculate_intraday_factors(data)
-                result = pd.concat([result, intraday_factors], axis=1)
+                new_intraday_cols = [col for col in intraday_factors.columns if col not in original_columns]
+                if new_intraday_cols:
+                    result = pd.concat([result, intraday_factors[new_intraday_cols]], axis=1)
             
             self.logger.info(f"计算技术因子完成，新增{len([col for col in result.columns if col not in data.columns])}个因子")
             return result
