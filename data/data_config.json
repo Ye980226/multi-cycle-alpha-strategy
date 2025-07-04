@@ -1,0 +1,66 @@
+{
+  "data_sources": {
+    "primary": "akshare",
+    "backup": "tushare",
+    "external": [
+      "news",
+      "sentiment",
+      "macro"
+    ]
+  },
+  "update_frequency": {
+    "daily": [
+      "daily_price",
+      "fundamental"
+    ],
+    "intraday": [
+      "minute_price",
+      "tick"
+    ],
+    "weekly": [
+      "sentiment",
+      "news"
+    ],
+    "monthly": [
+      "macro"
+    ]
+  },
+  "storage_config": {
+    "format": "parquet",
+    "compression": "snappy",
+    "partitioning": [
+      "date",
+      "symbol"
+    ]
+  },
+  "factor_config": {
+    "computation_frequency": "daily",
+    "lookback_periods": [
+      5,
+      10,
+      20,
+      60,
+      120
+    ],
+    "universe_size": 500
+  },
+  "signal_config": {
+    "generation_frequency": "daily",
+    "horizons": [
+      1,
+      5,
+      10,
+      20
+    ],
+    "signal_types": [
+      "ranking",
+      "threshold",
+      "ml"
+    ]
+  },
+  "portfolio_config": {
+    "rebalance_frequency": "daily",
+    "max_position_size": 0.05,
+    "min_position_size": 0.001
+  }
+}
